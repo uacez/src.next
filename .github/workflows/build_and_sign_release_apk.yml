@@ -17,7 +17,7 @@ on:
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   build:
-    # The type of runner that the job will run on
+    # 定义要运行作业的计算机类型。
     runs-on: ubuntu-latest
 
     strategy:
@@ -26,26 +26,12 @@ jobs:
       matrix:
         platform: [arm, arm64, x86, x64]
 
-    # The GitHub Actions machines have a "slow disk", and a SSD "fast" disk.
-    # However, there is not enough space to do all the processing on the SSD.
-    
-    # We refer to the disks based on their name in /dev/disk
-    # /dev/disk/azure/root-part1 is / ("slow disk")
-    # /dev/disk/azure/resource-part1 is a 14 GB ephemeral SSD disk mounted in /mnt
-
-    # We store the source-code repository (kiwibrowser/src) on /dev/disk/azure/root-part1
-    # We store cache, dependencies and output on /dev/disk/azure/resource-part1 (SSD)
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
       - name: Initializing build
         run: echo Initializing build for platform ${{ matrix.platform }}
 
       - name: Updating APT repository
         run: sudo apt-get update
-
-      - name: Installing rclone
-        run: sudo -v ; wget https://downloads.rclone.org/v1.63.1/rclone-v1.63.1-linux-amd64.deb && sudo dpkg -i rclone-v1.63.1-linux-amd64.deb
 
       - name: Installing Python and OpenJDK
         run: sudo apt-get install -y 2to3 python3-minimal python3 dh-python python-is-python3 openjdk-8-jdk-headless ccache jq
@@ -55,29 +41,11 @@ jobs:
           sudo swapoff -av
           sudo rm -f /swapfile
 
-      - name: Reclaiming disk space on / by removing .NET framework
+      - name: Reclaiming disk space on / by removing.NET framework
         run: sudo rm -rf /usr/share/dotnet
 
       - name: Checking-out source-code in $GITHUB_WORKSPACE
         uses: actions/checkout@v2
-
-      - name: Creating secondary disk folder on /dev/disk/azure/resource-part1 (SSD)
-        run: |
-          sudo mkdir -p /extended_data
-          sudo chown -R runner:docker /extended_data
-      
-      # If you want to use only the SSD, you can use:
-      - name: On SSD - Creating symlink on /dev/disk/azure/root-part1 pointing to /dev/disk/azure/resource-part1
-        run: |
-          sudo ln -s /extended_data /mnt/secondary_disk
-          sudo ln -s /mnt/secondary_disk $GITHUB_WORKSPACE/
-      # or alternatively, to work on the main partition
-      # - name: On HDD - Creating symlink on /dev/disk/azure/root-part1 pointing to /dev/disk/azure/resource-part1
-      #  run: |
-      #    sudo ln -s /extended_data /mnt/secondary_disk
-      #    sudo ln -s /mnt/secondary_disk $GITHUB_WORKSPACE/
-
-      # We cannot checkout outside of $GITHUB_WORKSPACE, but we want to checkout to the SSD
 
       - name: Creating output folder
         run: mkdir -p secondary_disk/out/android_${{ matrix.platform }}
@@ -87,15 +55,6 @@ jobs:
 
       - name: Copying args.gn to target folder
         run: cat .build/android_arm/args.gn | sed "s#target_cpu = \"arm\"#target_cpu = \"${{ matrix.platform }}\"#" | sed "s#android_default_version_name = \"Git\"#android_default_version_name = \"Git$(date '+%y%m%d')Gen${{ github.run_id }}\"#" > secondary_disk/out/android_${{ matrix.platform }}/args.gn
-
-      - name: Creating rclone config
-        run: |
-          mkdir -p $HOME/.config/rclone/
-          echo '[cache]' > $HOME/.config/rclone/rclone.conf
-          echo 'type = sftp' >> $HOME/.config/rclone/rclone.conf
-          echo 'host = ${{ secrets.STORAGE_HOST }}' >> $HOME/.config/rclone/rclone.conf
-          echo 'user = storage' >> $HOME/.config/rclone/rclone.conf
-          echo 'key_pem = ${{ secrets.STORAGE_KEY }}' >> $HOME/.config/rclone/rclone.conf
 
       - name: Modifying args.gn (arm)
         if: matrix.platform == 'arm'
@@ -119,48 +78,11 @@ jobs:
       - name: Checking available disk-space
         run: df -h
 
-      - name: Uploading args.gn
-        run: rclone copy --transfers=128 --retries=10 secondary_disk/out/android_${{ matrix.platform }}/args.gn cache:kiwibrowser-next-builds-${{ matrix.platform }}/
-
-      - name: Calling buildbot
-        if: false
-        run: curl ipinfo.io
-
-      - name: Downloading binary objects cache to $HOME/cache
-        run: rclone copy --transfers=128 --retries=10 cache:kiwibrowser-next-builds-${{ matrix.platform }}/ $HOME/kiwibrowser-next-builds-${{ matrix.platform }}
-
-      - name: Transferring build to the standard Kiwi Browser run ID
-        run: rclone copy --transfers=128 --retries=10 cache:kiwibrowser-next-builds-${{ matrix.platform }}/ cache:kiwibrowser-builds/${{ github.run_id }}/${{ matrix.platform }}
-
-      - name: Listing files
-        run: |
-          echo $HOME
-          ls -la $HOME/kiwibrowser-next-builds-${{ matrix.platform }}
-
-      - name: Uploading APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: apk-${{ matrix.platform }}
-          path: /home/runner/kiwibrowser-next-builds-${{ matrix.platform }}/
-
   sign_and_upload:
     runs-on: ubuntu-latest
     needs: build
 
     steps:
-      - name: Installing rclone
-        run: curl --http1.1 https://rclone.org/install.sh | sudo bash
-    
-      - name: Creating rclone config
-        run: |
-          mkdir -p $HOME/.config/rclone/
-          echo '[cache]' > $HOME/.config/rclone/rclone.conf
-          echo 'type = sftp' >> $HOME/.config/rclone/rclone.conf
-          echo 'host = ${{ secrets.STORAGE_HOST }}' >> $HOME/.config/rclone/rclone.conf
-          echo 'user = storage' >> $HOME/.config/rclone/rclone.conf
-          echo 'key_pem = ${{ secrets.STORAGE_KEY }}' >> $HOME/.config/rclone/rclone.conf
-
-
       - name: Downloading artifact (arm)
         uses: actions/download-artifact@v4
         with:
@@ -242,7 +164,6 @@ jobs:
             - You can install a "-github.apk" build on top of a "-github.apk" build, and a "-playstore.apk" build on top of a "-playstore.apk" build.
             - You cannot install a "-playstore.apk" build on top of a "-github.apk" build.
           
-          Essentially, if you downloaded Kiwi from an app store, you need to use the "-playstore.apk" files or uninstall the version of Kiwi you have and start using the "-github.apk" version.
           EOT
 
       - name: Creating release
@@ -258,19 +179,6 @@ jobs:
           draft: false
           prerelease: true
           body_path: release_notes.txt
-
-      - name: Signing and uploading release to GitHub and send to the Play Store
-        if: ${{ github.repository_owner == 'kiwibrowser' && contains(github.event.inputs.prepareRelease, 'yes') }}
-        run: |
-          curl 'https://${{ secrets.RELEASE_HOST }}/?run_id=${{ github.run_id }}&dk=${{ secrets.DEPLOY_KEY }}&publish=1&target=aab'
-
-      - name: Downloading artifacts from storage
-        if: ${{ github.repository_owner == 'kiwibrowser' }}
-        run: |
-          rclone copy --transfers=128 --retries=100 cache:kiwibrowser-builds/${{ github.run_id }}/arm/ ./apk-arm 
-          rclone copy --transfers=128 --retries=100 cache:kiwibrowser-builds/${{ github.run_id }}/arm64/ ./apk-arm64
-          rclone copy --transfers=128 --retries=100 cache:kiwibrowser-builds/${{ github.run_id }}/x86/ ./apk-x86
-          rclone copy --transfers=128 --retries=100 cache:kiwibrowser-builds/${{ github.run_id }}/x64/ ./apk-x64
 
       - name: Uploading release asset (arm-signed)
         if: ${{ github.repository_owner == 'kiwibrowser' }}
@@ -374,7 +282,7 @@ jobs:
                       --arg content "A new build of Kiwi Browser Next (preview version) is available. This version will replace your currently installed Kiwi Browser (com.kiwibrowser.browser) <@&913196471787065344> - https://github.com/kiwibrowser/src.next/releases/tag/${{ github.run_id }} $COMMIT_MSG" \
                       '{username: $username, content: $content}')
           curl -H 'Content-Type: application/json' -X POST -d "$PAYLOAD" ${{ secrets.DISCORD_WEBHOOK }}
-      
+
       - name: Send announcement on Telegram
         continue-on-error: true
         if: contains(github.event.inputs.announceOnMessengers, 'yes')
@@ -384,7 +292,4 @@ jobs:
                       --arg text "A new build of Kiwi Browser Next (preview version) is available. Link: [${{ github.run_id }}](https://github.com/kiwibrowser/src.next/releases/tag/${{ github.run_id }}) $COMMIT_MSG" \
                       --arg chat_id "@kiwibrowserbuilds" \
                       --arg parse_mode "markdown" \
-                      --argjson reply_markup '{"inline_keyboard": [[{"text": "x86", "url": "https://github.com/kiwibrowser/src.next/releases/download/${{ github.run_id }}/com.kiwibrowser.browser-x86-${{ github.run_id }}-github.apk"},{"text": "x64", "url": "https://github.com/kiwibrowser/src.next/releases/download/${{ github.run_id }}/com.kiwibrowser.browser-x64-${{ github.run_id }}-github.apk"}],[{"text": "arm", "url": "https://github.com/kiwibrowser/src.next/releases/download/${{ github.run_id }}/com.kiwibrowser.browser-arm-${{ github.run_id }}-github.apk"},{"text": "arm64", "url": "https://github.com/kiwibrowser/src.next/releases/download/${{ github.run_id }}/com.kiwibrowser.browser-arm64-${{ github.run_id }}-github.apk"}],[{"text": ".DEV x86", "url": "https://github.com/kiwibrowser/src.next/releases/download/${{ github.run_id }}/com.kiwibrowser.browser.dev-x86-${{ github.run_id }}-github.apk"},{"text": ".DEV x64", "url": "https://github.com/kiwibrowser/src.next/releases/download/${{ github.run_id }}/com.kiwibrowser.browser.dev-x64-${{ github.run_id }}-github.apk"}],[{"text": ".DEV arm", "url": "https://github.com/kiwibrowser/src.next/releases/download/${{ github.run_id }}/com.kiwibrowser.browser.dev-arm-${{ github.run_id }}-github.apk"},{"text": ".DEV arm64", "url": "https://github.com/kiwibrowser/src.next/releases/download/${{ github.run_id }}/com.kiwibrowser.browser.dev-arm64-${{ github.run_id }}-github.apk"}]]}' \
-                      '{text: $text, chat_id: $chat_id, parse_mode: $parse_mode, reply_markup: $reply_markup}')
-          curl -H "Content-Type: application/json" -X POST -d "$PAYLOAD" https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendMessage
-
+                      --argjson reply_markup '{"inline_keyboard": [[{"text": "x86", "url": "https://github.com/kiwibrowser/src.next/releases/download/${{ github.run_id }}/com.kiwibrowser.browser-x86-${{ github.run_id }}-github.apk"},{"text": "x64", "url": "https://github.com/kiwibrowser/src.next/releases/download/${{ github.run_id }}/com.kiwibrowser.browser-x64-${{ github.run_id }}-github.apk"}],[{"text": "arm", "url": "https://github.com/kiwibrowser/src.next/releases/download/${{ github.run_id }}/com.kiwibrowser.browser-arm-${{ github.run_id }}-github.apk"},{"text": "arm64", "url": "https://github.com/kiwibrowser/src.next/releases/download/${{ github.run_id }}/com.kiwibrowser.browser-arm64-${{ github.run_id }}-github.apk"}],[{"text": ".DEV x86", "url": "https://github.com/kiwibrowser/src.next/releases/download/${{ github.run_id }}/com.kiwibrowser.browser.dev-x86-${{ github.run_id }}-
